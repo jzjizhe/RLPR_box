@@ -1148,6 +1148,10 @@ class RayPPOTrainer(object):
                     n=1
                     # decoding_strategy='greedy'
                     print(f"We rollout {n=} samples for {val_name}")
+                # elif 'AIME' in val_name:
+                #     n=16
+                #     decoding_strategy='sampling'
+                #     print(f"We rollout {n=} samples for {val_name}")
                 elif self.config.actor_rollout_ref.rollout.get("val_n", False):
                     n=self.config.actor_rollout_ref.rollout.val_n
                     print(f"We rollout {n=} samples for {val_name}")

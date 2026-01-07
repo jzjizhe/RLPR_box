@@ -2,12 +2,12 @@
 set -x
 MODEL=Qwen3-4B-Base
 DATA_DIR=/data0/jzzhang/datasets/PR_box
-ResultDir="/data0/jzzhang/RLPR/results"
+ResultDir=/data0/jzzhang/RLPR_box/results
 N_GPUS_PER_NODE=8
 MAX_TOKENS=32768
 MAX_ROLLOUT_TOKENS=32768
-EXP_NAME=Qwen3-4B_rlhr_cot_answer_topk_clip01_box
 layer=29
+EXP_NAME=Qwen3-4B_rlhr_cot_answer_topk_clip01_box_layer${layer}
 
 USE_WANDB=${USE_WANDB:-"false"}
 export ACCELERATE_LOG_LEVEL=info
@@ -19,7 +19,7 @@ export USED_MODEL=${USED_MODEL:-"no_api"}
 
 TRAIN_FILES=$DATA_DIR/rlpr_train.parquet
 VAL_DIR=$DATA_DIR
-VAL_FILES=[${VAL_DIR}'/Math-500_Avg2.parquet',${VAL_DIR}'/gpqa_diamond_Avg4.parquet',${VAL_DIR}'/AIME2024_Avg16.parquet',${VAL_DIR}'/WebInstruct-verified-val_Avg2.parquet',${VAL_DIR}'/Minerva_Avg4.parquet',${VAL_DIR}'/TheoremQA_Avg2.parquet',${VAL_DIR}'/MMLUProALL.parquet',${VAL_DIR}'/SuperGPQA.parquet',${VAL_DIR}'/AMC.parquet',${VAL_DIR}'/AIME25.parquet']
+VAL_FILES=[${VAL_DIR}'/Math-500_Avg2.parquet',${VAL_DIR}'/gpqa_diamond_Avg4.parquet',${VAL_DIR}'/WebInstruct-verified-val_Avg2.parquet',${VAL_DIR}'/Minerva_Avg4.parquet',${VAL_DIR}'/TheoremQA_Avg2.parquet',${VAL_DIR}'/MMLUPro-1000_Avg2.parquet']
 
 # Logging and Checkpointing
 export LOGS_PATH=${ResultDir}/data/logs
@@ -29,6 +29,8 @@ VAL_SAVE_RESULTS_DIR=${ResultDir}/data/logs/test_generations_${EXP_NAME}
 mkdir -p "${VAL_SAVE_RESULTS_DIR}"
 LOCAL_DIR=${ResultDir}/data/checkpoints/${EXP_NAME}
 mkdir -p "${LOCAL_DIR}"
+LOG_TXT=${ResultDir}/data/logs/${EXP_NAME}
+mkdir -p "${LOG_TXT}"
 
 # --- Conditional WandB Setup ---
 TRAINER_LOGGER_CONFIG="['console']" # Default logger
@@ -98,9 +100,10 @@ python -m verl.trainer.main_ppo \
     trainer.nnodes=$nnodes \
     trainer.save_freq=50 \
     trainer.test_freq=50 \
-    +trainer.test_decoding_strategy=sample \
+    +trainer.test_decoding_strategy=sampling \
     +actor_rollout_ref.rollout.val_temperature=0.6 \
     +actor_rollout_ref.rollout.val_top_p=0.7 \
+    +actor_rollout_ref.rollout.val_n=4 \
     trainer.total_epochs=100 \
     trainer.total_training_steps=300 \
     +trainer.val_save_results_dir=${VAL_SAVE_RESULTS_DIR} \
@@ -114,5 +117,4 @@ python -m verl.trainer.main_ppo \
     +actor_rollout_ref.actor.reward_hidden_type=subspace_energy_overlap_topk \
     actor_rollout_ref.actor.layer_list=[$layer] \
     +reward_model.reward_manager_shaping_function_name=clip_01 \
-    +reward_model.format_coefficient=0 \
-    "$@"
+    +reward_model.format_coefficient=0  2>&1 | tee -a $LOG_TXT/log.txt 
