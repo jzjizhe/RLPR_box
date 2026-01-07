@@ -3,9 +3,9 @@ set -x
 MODEL=Qwen3-4B-Base
 DATA_DIR=/data0/jzzhang/datasets/PR_box
 ResultDir=/data0/jzzhang/RLPR_box/results
-N_GPUS_PER_NODE=8
 MAX_TOKENS=32768
 MAX_ROLLOUT_TOKENS=32768
+N_GPUS_PER_NODE=8
 layer=29
 EXP_NAME=Qwen3-4B_rlhr_cot_answer_topk_clip01_box_layer${layer}
 
@@ -33,7 +33,7 @@ LOG_TXT=${ResultDir}/data/logs/${EXP_NAME}
 mkdir -p "${LOG_TXT}"
 
 # --- Conditional WandB Setup ---
-TRAINER_LOGGER_CONFIG="['console']" # Default logger
+TRAINER_LOGGER_CONFIG="['console','tensorboard']" # Default logger
 declare -a WANDB_PARAMETERS # Array to hold WandB specific parameters
 
 if [ "$USE_WANDB" = "true" ]; then
@@ -98,8 +98,8 @@ python -m verl.trainer.main_ppo \
     +trainer.val_before_train=True \
     trainer.n_gpus_per_node=${N_GPUS_PER_NODE} \
     trainer.nnodes=$nnodes \
-    trainer.save_freq=50 \
-    trainer.test_freq=50 \
+    trainer.save_freq=100 \
+    trainer.test_freq=25 \
     +trainer.test_decoding_strategy=sampling \
     +actor_rollout_ref.rollout.val_temperature=0.6 \
     +actor_rollout_ref.rollout.val_top_p=0.7 \
