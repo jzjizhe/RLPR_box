@@ -2,7 +2,7 @@
 set -x
 MODEL=Qwen3-4B-Base
 DATA_DIR=/data0/jzzhang/datasets/PR_box
-ResultDir=/data0/jzzhang/RLPR_box/results
+ResultDir=/data0/jzzhang/RLPR_box/results/Qwen3-4B-Base
 MAX_TOKENS=32768
 MAX_ROLLOUT_TOKENS=32768
 N_GPUS_PER_NODE=8
@@ -45,7 +45,7 @@ if [ "$USE_WANDB" = "true" ]; then
     export WANDB_DIR=${WANDB_DIR_PATH}
 
     TRAINER_LOGGER_CONFIG="['console','wandb','tensorboard']"
-    WANDB_PARAMETERS=(
+    WANDB_PARAMETERS=tensorboard(
         "trainer.project_name=$WANDB_PRJ_NAME"
         "trainer.val_generations_to_log_to_wandb=10"
         "+trainer.train_generations_to_log_to_wandb=1"
