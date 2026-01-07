@@ -1144,7 +1144,11 @@ class RayPPOTrainer(object):
         with tqdm(total=len(self.val_dataloaders)) as pbar:
             for idx, val_dataloader in enumerate(self.val_dataloaders):
                 val_name = self.val_names[idx]
-                if self.config.actor_rollout_ref.rollout.get("val_n", False):
+                if  'SuperGPQA' in val_name or 'MMLUProALL' in val_name:
+                    n=1
+                    # decoding_strategy='greedy'
+                    print(f"We rollout {n=} samples for {val_name}")
+                elif self.config.actor_rollout_ref.rollout.get("val_n", False):
                     n=self.config.actor_rollout_ref.rollout.val_n
                     print(f"We rollout {n=} samples for {val_name}")
                 else:
