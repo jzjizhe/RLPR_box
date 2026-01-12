@@ -90,17 +90,7 @@ def subspace_energy_overlap_per_sample(
     k=None,
     eps=1e-8,
 ):
-    """
-    For each sample b:
-      - extract golden final answer tokens
-      - build per-sample correctness subspace V_b
-      - compute golden_energy_b
-      - extract predicted final answer tokens
-      - compute predicted_energy_b
-      - score_b = predicted_energy_b / golden_energy_b
 
-    return: list of scores (length B)
-    """
 
     # --------------------------------------------------
     # 1. extract golden answer tokens for sample b
@@ -154,24 +144,16 @@ def subspace_energy_overlap_topk(
     k=5,
     eps=1e-8,
 ):
-    """
-    For each sample b:
-      - extract golden final answer tokens
-      - build per-sample correctness subspace V_b
-      - compute golden_energy_b
-      - extract predicted final answer tokens
-      - compute predicted_energy_b
-      - score_b = predicted_energy_b / golden_energy_b
 
-    return: list of scores (length B)
-    """
     # H_all_gold = golden_hidden        # [S, D]
     H_pred = pred_hidden[pred_mask]             # [Tp, D]
     if H_pred.size(0) == 0:
         return 0
+    
     H_gold = golden_hidden[golden_mask]       # [Tg, D]
     if H_gold.size(0) == 0:
         return 0
+
     # whiten golden
     H_gold_w = _token_whiten(H_gold)
     # correctness subspace (per-sample)
@@ -191,6 +173,173 @@ def subspace_energy_overlap_topk(
     pred_proj = H_pred_w @ V_gold
     pred_energy = pred_proj.pow(2).sum(dim=1)
     pred_energy = pred_energy.topk(min(k,H_pred.size(0))).values.mean().item()
+    score = pred_energy / (gold_energy + eps)
+    return score
+
+def _token_norm(H, eps=1e-8):
+    return H / (H.norm(dim=-1, keepdim=True) + eps)
+def subspace_energy_overlap_topk_white_norm(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    # token normalization (length-agnostic)
+    if Tg==1 or Tp==1:
+        H_gold_n = _token_norm(H_gold, eps=eps)  # [Tg, D]
+        H_pred_n = _token_norm(H_pred, eps=eps)  # [Tp, D]
+    else:
+        H_gold_n = _token_whiten(H_gold, eps=eps)  # [Tg, D]
+        H_pred_n = _token_whiten(H_pred, eps=eps)  # [Tp, D]
+
+
+    # effective rank (cannot exceed min(Tg, D))
+    # r_eff = min(r, Tg, D)
+    # if r_eff <= 0:
+        # return 0.0
+
+    # deterministic SVD on golden normalized states
+    # H_gold_n = U S Vh, where Vh: [min(Tg,D), D]
+    try:
+        _, _, Vh = torch.linalg.svd(H_gold_n, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh.T  # [D, r_eff]
+
+    # golden projection energy
+    gold_proj = H_gold_n @ V_gold                      # [Tg, r_eff]
+    gold_energy = gold_proj.pow(2).sum(dim=1)          # [Tg]
+    gold_energy = gold_energy.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy < eps:
+        return 0.0
+
+    # predicted projection energy
+    pred_proj = H_pred_n @ V_gold                      # [Tp, r_eff]
+    pred_energy = pred_proj.pow(2).sum(dim=1)          # [Tp]
+    pred_energy = pred_energy.topk(min(k, Tp)).values.mean().item()
+
+    score = pred_energy / (gold_energy + eps)
+    return score
+def subspace_energy_overlap_topk_norm(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    # token normalization (length-agnostic)
+    H_gold_n = _token_norm(H_gold, eps=eps)  # [Tg, D]
+    H_pred_n = _token_norm(H_pred, eps=eps)  # [Tp, D]
+
+    # effective rank (cannot exceed min(Tg, D))
+    # r_eff = min(r, Tg, D)
+    # if r_eff <= 0:
+        # return 0.0
+
+    # deterministic SVD on golden normalized states
+    # H_gold_n = U S Vh, where Vh: [min(Tg,D), D]
+    try:
+        _, _, Vh = torch.linalg.svd(H_gold_n, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh.T  # [D, r_eff]
+
+    # golden projection energy
+    gold_proj = H_gold_n @ V_gold                      # [Tg, r_eff]
+    gold_energy = gold_proj.pow(2).sum(dim=1)          # [Tg]
+    gold_energy = gold_energy.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy < eps:
+        return 0.0
+
+    # predicted projection energy
+    pred_proj = H_pred_n @ V_gold                      # [Tp, r_eff]
+    pred_energy = pred_proj.pow(2).sum(dim=1)          # [Tp]
+    pred_energy = pred_energy.topk(min(k, Tp)).values.mean().item()
+
+    score = pred_energy / (gold_energy + eps)
+    return score
+def subspace_energy_overlap_topk_nocenter(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    # token normalization (length-agnostic)
+    H_gold_n = H_gold
+    H_pred_n = H_pred
+
+    # effective rank (cannot exceed min(Tg, D))
+    # r_eff = min(r, Tg, D)
+    # if r_eff <= 0:
+        # return 0.0
+
+    # deterministic SVD on golden normalized states
+    # H_gold_n = U S Vh, where Vh: [min(Tg,D), D]
+    try:
+        _, _, Vh = torch.linalg.svd(H_gold_n, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh.T  # [D, r_eff]
+
+    # golden projection energy
+    gold_proj = H_gold_n @ V_gold                      # [Tg, r_eff]
+    gold_energy = gold_proj.pow(2).sum(dim=1)          # [Tg]
+    gold_energy = gold_energy.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy < eps:
+        return 0.0
+
+    # predicted projection energy
+    pred_proj = H_pred_n @ V_gold                      # [Tp, r_eff]
+    pred_energy = pred_proj.pow(2).sum(dim=1)          # [Tp]
+    pred_energy = pred_energy.topk(min(k, Tp)).values.mean().item()
+
     score = pred_energy / (gold_energy + eps)
     return score
 def subspace_energy_overlap_nocenter_topk(
@@ -272,6 +421,32 @@ def subspace_energy_overlap_tokencenter_topk(
     pred_energy = pred_proj.pow(2).sum(dim=1)
     pred_energy = pred_energy.topk(min(k,H_pred.size(0))).values.mean().item()
     score = pred_energy / (gold_energy + eps)
+    return score
+def mean_cosine_score(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    eps=1e-8,
+):
+    # extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    # span mean (no centering, no token norm)
+    v_pred = H_pred.mean(dim=0)   # [D]
+    v_gold = H_gold.mean(dim=0)   # [D]
+
+    # cosine similarity
+    denom = (v_pred.norm() * v_gold.norm()).clamp_min(eps)
+    score = (v_pred @ v_gold) / denom
+    score =(score.item()+1)/2
+
     return score
 def subspace_energy_overlap_goldencenter_topk(
     golden_hidden,       # [S, D] ( golden final answer hidden)

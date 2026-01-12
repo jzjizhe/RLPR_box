@@ -9,7 +9,7 @@ MAX_ROLLOUT_TOKENS=32768
 N_GPUS_PER_NODE=8
 layer=29
 TOTAL_STEPS=300
-EXP_NAME=Qwen3-4B_rlhr_cot_answer_topk_clip01_box_layer${layer}
+EXP_NAME=Qwen3-4B_rlhr_cot_answer_topk_white_norm_clip01_box_layer${layer}
 
 # 设置日志文件路径
 LOG_TXT=${ResultDir}/data/logs/${EXP_NAME}
@@ -130,7 +130,7 @@ python -m verl.trainer.main_ppo \
     +reward_model.val_reward_manager=naive \
     +reward_model.format_mode=boxed \
     actor_rollout_ref.actor.is_get_hidden=True \
-    +actor_rollout_ref.actor.reward_hidden_type=subspace_energy_overlap_topk \
+    +actor_rollout_ref.actor.reward_hidden_type=subspace_energy_overlap_topk_white_norm \
     actor_rollout_ref.actor.layer_list=[$layer] \
     +reward_model.reward_manager_shaping_function_name=clip_01 \
     +reward_model.format_coefficient=0
