@@ -560,10 +560,6 @@ def subspace_sim(
     if k is not None and Hp.size(0) > k:
         Hp = Hp[-k:]
 
-    # ---- 2. token-center ----
-    Hg = Hg - Hg.mean(dim=0, keepdim=True)
-    Hp = Hp - Hp.mean(dim=0, keepdim=True)
-
     # ---- 3. SVD → subspaces ----
     # Hg = U S Vh → Vg = Vh.T
     _, _, Vh_g = torch.linalg.svd(Hg, full_matrices=False)

@@ -2666,14 +2666,14 @@ class RayPPOTrainer(object):
             max_length=max_length,
             return_offsets_mapping=True,
         )
-
+        add_one=self.config.actor_rollout_ref.actor.get('add_one_token', False)
         pred_offsets = pred_inputs.pop("offset_mapping")
         gold_offsets = gold_inputs.pop("offset_mapping")
 
         pred_answer_span = torch.full((batch_size, 2), -1, dtype=torch.long)
         gold_answer_span = torch.full((batch_size, 2), -1, dtype=torch.long)
 
-        def charspan_to_tokens(offsets_1d, char_start, char_end):
+        def charspan_to_tokens(offsets_1d, char_start, char_end,add_one):
             # 返回 token index 的 [start,end]，两端都包含（inclusive）
             tok_start, tok_end = -1, -1
             for t, (s, e) in enumerate(offsets_1d):
@@ -2686,6 +2686,8 @@ class RayPPOTrainer(object):
                 if tok_start == -1:
                     tok_start = t
                 tok_end = t
+            if add_one and tok_start>0:
+                tok_start-=1
             return (tok_start, tok_end) if tok_start != -1 else (-1, -1)
 
         max_pred_ans_len = 0
@@ -2695,7 +2697,7 @@ class RayPPOTrainer(object):
             # pred span：只有在 pred 原本有效且非空时才给 span
             if pred_answers[i] is not None and len(pred_answers[i]) > 0:
                 cs, ce = pred_char_spans[i]
-                ts, te = charspan_to_tokens(pred_offsets[i], cs, ce)
+                ts, te = charspan_to_tokens(pred_offsets[i], cs, ce,add_one)
                 pred_answer_span[i] = torch.tensor([ts, te])
                 if ts != -1:
                     max_pred_ans_len = max(max_pred_ans_len, te - ts + 1)
@@ -2704,7 +2706,7 @@ class RayPPOTrainer(object):
 
             # gold span：一般总有效；但也要防截断导致找不到
             cs, ce = gold_char_spans[i]
-            ts, te = charspan_to_tokens(gold_offsets[i], cs, ce)
+            ts, te = charspan_to_tokens(gold_offsets[i], cs, ce,add_one)
             gold_answer_span[i] = torch.tensor([ts, te])
             if ts != -1:
                 max_gt_ans_len = max(max_gt_ans_len, te - ts + 1)
@@ -2736,6 +2738,7 @@ class RayPPOTrainer(object):
         self, prompt_ids,input_mask,input_position_ids, gen_response_batch, ground_truth_batch,
         eos_token_str, pad_token_str, suffix
     ):
+        add_one=self.config.actor_rollout_ref.actor.get('add_one_token', False)
         batch_size, prompt_length = prompt_ids.shape
         resp_len = gen_response_batch.shape[1]
         device = prompt_ids.device
@@ -2764,7 +2767,7 @@ class RayPPOTrainer(object):
             golden_resp.append(replace_boxed_answer(resp_texts[i], ground_truth_batch[i]))
 
         # ===== helpers =====
-        def charspan_to_tokens(offsets_1d, char_start, char_end):
+        def charspan_to_tokens(offsets_1d, char_start, char_end,add_one):
             # 返回 token index 的 [start,end]，两端都包含（inclusive）
             tok_start, tok_end = -1, -1
             for t, (s, e) in enumerate(offsets_1d):
@@ -2777,6 +2780,9 @@ class RayPPOTrainer(object):
                 if tok_start == -1:
                     tok_start = t
                 tok_end = t
+            if add_one and tok_start>0:
+                tok_start-=1
+
             return (tok_start, tok_end) if tok_start != -1 else (-1, -1)
         
         pred_tok = self.tokenizer(
@@ -2809,7 +2815,7 @@ class RayPPOTrainer(object):
         for i in range(batch_size):
             if valid_flags[i]:
                 cs, ce = pred_char_spans[i]
-                ts, te = charspan_to_tokens(pred_offsets[i], cs, ce)
+                ts, te = charspan_to_tokens(pred_offsets[i], cs, ce,add_one)
                 if ts != -1:
                     gen_answer_span[i] = torch.tensor([prompt_length + ts, prompt_length + te], device=device)
                     max_gen_ans_len = max(max_gen_ans_len, te - ts + 1)
@@ -2822,7 +2828,7 @@ class RayPPOTrainer(object):
             gt_content, (cs, ce) = extract_boxed_answer_with_span(golden_resp[i])
             if gt_content is None or cs < 0:
                 continue
-            ts, te = charspan_to_tokens(gold_offsets[i], cs, ce)
+            ts, te = charspan_to_tokens(gold_offsets[i], cs, ce,add_one)
             if ts != -1:
                 gt_answer_span[i] = torch.tensor([prompt_length + ts, prompt_length + te], device=device)
                 max_gt_ans_len = max(max_gt_ans_len, te - ts + 1)
