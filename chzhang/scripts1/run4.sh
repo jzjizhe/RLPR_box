@@ -10,7 +10,7 @@ MAX_ROLLOUT_TOKENS=32768
 N_GPUS_PER_NODE=8
 layer=29
 TOTAL_STEPS=300
-EXP_NAME=Qwen3-4B_rlhr_cot_answer_topk_whitenadd1_clip01_box_layer${layer}
+EXP_NAME=Qwen3-4B_rlvr
 
 # 设置日志文件路径
 LOG_TXT=${ResultDir}/data/logs/${EXP_NAME}
