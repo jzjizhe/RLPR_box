@@ -10,7 +10,7 @@ MAX_ROLLOUT_TOKENS=32768
 N_GPUS_PER_NODE=4
 layer=29
 TOTAL_STEPS=300
-EXP_NAME=Qwen3-4B_rlhr_cot_answer_topk_white_norm_clip01_box_layer${layer}
+EXP_NAME=Qwen3-4B_rlhr_cot_answer_topk_white_norm_clip01_box_layer${layer}_minibsz256
 # 设置日志文件路径
 LOG_TXT=${ResultDir}/data/logs/${EXP_NAME}
 mkdir -p "${LOG_TXT}"
@@ -67,7 +67,7 @@ python -m verl.trainer.main_ppo \
     actor_rollout_ref.model.path=$MODEL \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=256 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$MAX_TOKENS \
     actor_rollout_ref.actor.use_kl_loss=False \
