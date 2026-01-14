@@ -67,7 +67,7 @@ python -m verl.trainer.main_ppo \
     actor_rollout_ref.model.path=$MODEL \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=256 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=128 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$MAX_TOKENS \
     actor_rollout_ref.actor.use_kl_loss=False \
@@ -134,7 +134,7 @@ python -m verl.trainer.main_ppo \
     data.max_response_length=2048 \
     actor_rollout_ref.model.path=$target_dir \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=128 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$MAX_TOKENS \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
@@ -172,7 +172,7 @@ python -m verl.trainer.main_ppo \
     data.max_response_length=2048 \
     actor_rollout_ref.model.path=$target_dir \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=128 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$MAX_TOKENS \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
