@@ -779,7 +779,7 @@ class ActorRolloutRefWorker(Worker):
             amplify_reward,exp_norm,clip_01,subspace_energy_overlap_tokencenter_topk,subspace_energy_overlap_tokencenter_mean,
             subspace_sim,
             subspace_sim_r_weighted_golden_nodiv,subspace_energy_overlap_golden_anchored_topk,subspace_energy_overlap_nocenter_topk,
-            subspace_energy_overlap_topk_nocenter,mean_cosine_score,subspace_energy_overlap_topk_white_norm
+            subspace_energy_overlap_topk_nocenter,mean_cosine_score,subspace_energy_overlap_topk_white_norm,subspace_energy_overlap_topk_white
         )
 
         # 检查是否已有 reward scores
@@ -890,6 +890,14 @@ class ActorRolloutRefWorker(Worker):
                     )
                 elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_topk_white_norm":
                     hidden_score = subspace_energy_overlap_topk_white_norm(
+                        golden_hidden=golden_hidden[i],
+                        pred_hidden=pred_hidden[i],
+                        golden_mask=golden_mask[i],
+                        pred_mask=pred_mask[i],
+                    )
+
+                elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_topk_white":
+                    hidden_score = subspace_energy_overlap_topk_white(
                         golden_hidden=golden_hidden[i],
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],

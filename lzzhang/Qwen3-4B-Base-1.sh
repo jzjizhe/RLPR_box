@@ -1,6 +1,6 @@
 #!/bin/bash
 # 先定义基本变量，用于确定日志文件路径
-MODEL=Qwen3-4B-Base
+MODEL=/cpfs01/user/fanglizhe.flz/hf_models/Qwen3-4B-Base
 Code_PATH=/data0/jzzhang/RLPR_box
 DATA_DIR=/data0/jzzhang/datasets/PR_box
 ResultDir=/data0/jzzhang/RLPR_box/results/Qwen3-4B-Base

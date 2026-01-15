@@ -178,6 +178,52 @@ def subspace_energy_overlap_topk(
 
 def _token_norm(H, eps=1e-8):
     return H / (H.norm(dim=-1, keepdim=True) + eps)
+def subspace_energy_overlap_topk_white(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    # token normalization (length-agnostic)
+    H_gold_n = _token_whiten(H_gold, eps=eps)  # [Tg, D]
+    H_pred_n = _token_whiten(H_pred, eps=eps)  # [Tp, D]
+
+    try:
+        _, _, Vh = torch.linalg.svd(H_gold_n, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh.T  # [D, r_eff]
+
+    # golden projection energy
+    gold_proj = H_gold_n @ V_gold                      # [Tg, r_eff]
+    gold_energy = gold_proj.pow(2).sum(dim=1)          # [Tg]
+    gold_energy = gold_energy.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy < eps:
+        return 0.0
+
+    # predicted projection energy
+    pred_proj = H_pred_n @ V_gold                      # [Tp, r_eff]
+    pred_energy = pred_proj.pow(2).sum(dim=1)          # [Tp]
+    pred_energy = pred_energy.topk(min(k, Tp)).values.mean().item()
+
+    score = pred_energy / (gold_energy + eps)
+    return score
 def subspace_energy_overlap_topk_white_norm(
     golden_hidden,       # [S, D] golden final answer hidden
     pred_hidden,         # [S, D] predicted final answer hidden
