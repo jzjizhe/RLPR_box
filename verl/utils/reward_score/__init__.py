@@ -131,7 +131,10 @@ def _default_compute_score(data_source, solution_str, ground_truth, extra_info=N
     elif ("math_verify" in data_source or "Math-500" in data_source or "AIME2024" in data_source or "Minerva" in data_source
     or "TheoremQA" in data_source or "DigitalLearningGmbH/MATH-lighteval" in data_source):
         from . import math_verify
-        res = math_verify.compute_score(solution_str, ground_truth)
+        if 'box' in format_mode:
+            res = math_verify.compute_score(solution_str, ground_truth)
+        elif format_mode=="R1_nothink":
+            res = math_verify.compute_score_r1(solution_str, ground_truth)
     elif 'gpqa_diamond' in data_source or 'HellaSwag' in data_source or 'WebInstruct-verified-val' in data_source or 'MMLUPro' in data_source or 'SuperGPQA' in data_source:
         
         if 'MMLUPro' in data_source or 'SuperGPQA' in data_source:

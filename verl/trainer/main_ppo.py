@@ -165,7 +165,7 @@ def main_task(config, compute_score=None):
         val_reward_manager_cls = NaiveRewardManager
         val_reward_fn = val_reward_manager_cls(tokenizer=tokenizer, num_examine=1, compute_score=compute_score, 
                                                save_results_dir=config.trainer.get('val_save_results_dir', None),
-                                               phase='validation')
+                                               phase='validation',format_mode=config.reward_model.get('format_mode', 'R1'))
     elif val_reward_manager_name == 'prime':
         from verl.workers.reward_manager import PrimeRewardManager
         val_reward_manager_cls = PrimeRewardManager

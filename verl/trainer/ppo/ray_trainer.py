@@ -59,21 +59,32 @@ import verl.utils.torch_functional as verl_F
 from verl.utils.model import compute_position_id_with_mask
 from verl.utils.reward_score.repetition import detect_repetition_with_hash
 
-def extract_boxed_answer_with_span(text: str):
+def extract_boxed_answer_with_span(text,format_mode):
     """
     返回最后一个 boxed 的内容与内容字符 span (start,end)，span 不含 boxed 外壳
     """
-    pattern = r'boxed\{((?:[^\{\}]|\{(?:[^\{\}]|\{[^\{\}]*\})*\})*)\}'
-    last = None
-    for m in re.finditer(pattern, text):
-        last = m
-    if last is None:
-        return None, (-1, -1)
+    if 'box' in format_mode:
+        pattern = r'boxed\{((?:[^\{\}]|\{(?:[^\{\}]|\{[^\{\}]*\})*\})*)\}'
+        last = None
+        for m in re.finditer(pattern, text):
+            last = m
+        if last is None:
+            return None, (-1, -1)
+    elif format_mode=="R1_nothink":
+        pattern = r'<answer>(.*?)</answer>'
+        last = None
+        for m in re.finditer(pattern, text, re.DOTALL):
+            last = m
+        if last is None:
+            return None, (-1, -1)
     return last.group(1), last.span(1)
 
 
 def extract_boxed_answer(text):
     match = re.findall(r'boxed\{((?:[^\{\}]|\{(?:[^\{\}]|\{[^\{\}]*\})*\})*)\}', text)
+    return match[-1] if match else None
+def extract_R1_answer(text):
+    match = re.findall(r'<answer>(.*?)</answer>', text)
     return match[-1] if match else None
 def charspan_to_tokens(offsets_1d, char_start, char_end):
     tok_start, tok_end = -1, -1
@@ -126,6 +137,37 @@ def replace_boxed_answer(text, golden_answer_latex):
         suffix = "\n\\boxed{" + golden_answer_latex + "}"
     else:
         suffix = "\n\\boxed{" + " " + "}"
+    return stripped + suffix
+
+
+def replace_R1_answer(text, golden_answer):
+    """
+    Replace the last <answer>...</answer> in the text with <answer>golden_answer</answer>.
+    If there is no <answer>...</answer> in the generated text, append a new
+    <answer>golden_answer</answer> at the end.
+
+    支持 R1 和 R1_nothink 格式，使用非贪婪匹配处理多行内容。
+    与 extract_boxed_answer_with_span 的行为一致，只处理最后一个 <answer> 标签。
+    """
+    # 使用非贪婪匹配，支持多行内容（re.DOTALL）
+    pattern = r"<answer>.*?</answer>"
+
+    # 情况一：generated 里已经有 <answer>...</answer> → 替换最后一个
+    matches = list(re.finditer(pattern, text, re.DOTALL))
+    if matches:
+        # 找到最后一个匹配
+        last_match = matches[-1]
+        # 替换最后一个匹配
+        start, end = last_match.span()
+        return text[:start] + f"<answer>{golden_answer}</answer>" + text[end:]
+
+    # 情况二：generated 根本没用 <answer> → 直接在末尾补一个 golden answer
+    # 去掉末尾多余空白再加
+    stripped = text.rstrip()
+    if golden_answer:
+        suffix = f"\n<answer>{golden_answer}</answer>"
+    else:
+        suffix = "\n<answer> </answer>"  # 空答案时添加空格
     return stripped + suffix
 WorkerType = Type[Worker]
 
@@ -2739,6 +2781,7 @@ class RayPPOTrainer(object):
         eos_token_str, pad_token_str, suffix
     ):
         add_one=self.config.actor_rollout_ref.actor.get('add_one_token', False)
+        format_mode=self.config.reward_model.get('format_mode', 'box')
         batch_size, prompt_length = prompt_ids.shape
         resp_len = gen_response_batch.shape[1]
         device = prompt_ids.device
@@ -2752,7 +2795,7 @@ class RayPPOTrainer(object):
         valid_flags = []
 
         for t in resp_texts:
-            ans, (cs, ce) = extract_boxed_answer_with_span(t)
+            ans, (cs, ce) = extract_boxed_answer_with_span(t,format_mode=format_mode)
             if ans is None or ans.strip() == "":
                 pred_answers.append("")
                 pred_char_spans.append((-1, -1))
@@ -2764,7 +2807,10 @@ class RayPPOTrainer(object):
 
         golden_resp = []
         for i in range(batch_size):
-            golden_resp.append(replace_boxed_answer(resp_texts[i], ground_truth_batch[i]))
+            if 'box' in format_mode:
+                golden_resp.append(replace_boxed_answer(resp_texts[i], ground_truth_batch[i]))
+            else:
+                golden_resp.append(replace_R1_answer(resp_texts[i], ground_truth_batch[i]))
 
         # ===== helpers =====
         def charspan_to_tokens(offsets_1d, char_start, char_end,add_one):
@@ -2825,7 +2871,7 @@ class RayPPOTrainer(object):
         gt_answer_span = torch.full((batch_size, 2), -1, dtype=torch.long, device=device)
 
         for i in range(batch_size):
-            gt_content, (cs, ce) = extract_boxed_answer_with_span(golden_resp[i])
+            gt_content, (cs, ce) = extract_boxed_answer_with_span(golden_resp[i],format_mode=format_mode)
             if gt_content is None or cs < 0:
                 continue
             ts, te = charspan_to_tokens(gold_offsets[i], cs, ce,add_one)
@@ -3320,7 +3366,10 @@ class RayPPOTrainer(object):
         output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
         answer_lengths = []
         for text in output_texts:
-            answer_text=extract_boxed_answer(text)
+            if self.config.reward_model.get('format_mode', 'R1') == 'R1_nothink':
+                answer_text=extract_R1_answer(text)
+            else:
+                answer_text=extract_boxed_answer(text)
             if answer_text is not None and len(answer_text)>0:
                 try:
                     answer_tokens = self.tokenizer.tokenize(answer_text.strip())

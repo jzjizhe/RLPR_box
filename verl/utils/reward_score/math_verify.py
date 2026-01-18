@@ -18,7 +18,7 @@ try:
     from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
 except ImportError:
     print("To use Math-Verify, please install it first by running `pip install math-verify`.")
-
+import re
 
 def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0) -> bool:
     verify_func = math_metric(
@@ -41,3 +41,35 @@ def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0
         return ret_score,results_str[1]
     except:
         return ret_score,""
+
+
+def extract_answer(text: str) -> str:
+    if text is None:
+        return ""
+    # 1) <answer>...</answer>
+    m = re.search(r"<answer>\s*(.*?)\s*</answer>", text, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    else:
+        return ""
+
+def compute_score_r1(model_output: str, ground_truth: str, timeout_score: float = 0) -> bool:
+    verify_func = math_metric(
+        gold_extraction_target=(LatexExtractionConfig(),),
+        pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
+    )
+    ret_score = 0.0
+    pred_ans = extract_answer(model_output)
+
+    # Wrap the ground truth in \boxed{} format for verification
+    ground_truth_boxed = "\\boxed{" + str(ground_truth) + "}"
+    pred_ans = "\\boxed{" + pred_ans + "}"
+    try:
+        # results_str=[golds,preds]
+        ret_score, results_str = verify_func([ground_truth_boxed], [pred_ans])
+    except Exception:
+        pass
+    except TimeoutException:
+        ret_score = timeout_score
+
+    return ret_score,results_str[1]
