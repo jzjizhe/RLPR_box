@@ -37,4 +37,7 @@ def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0
     except TimeoutException:
         ret_score = timeout_score
 
-    return ret_score,results_str[1]
+    try:
+        return ret_score,results_str[1]
+    except:
+        return ret_score,""
