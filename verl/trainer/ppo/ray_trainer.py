@@ -58,7 +58,26 @@ from verl.utils.dataset.rl_dataset import RLHFDataset, collate_fn
 import verl.utils.torch_functional as verl_F
 from verl.utils.model import compute_position_id_with_mask
 from verl.utils.reward_score.repetition import detect_repetition_with_hash
+def truncate_after_last_boxed(text, format_mode='boxed') -> str:
+    """
+    截断到最后一个 boxed / answer 结束位置（保留其本身）。
+    若不存在对应格式，则原样返回。
+    """
+    if 'box' in format_mode:
+        pattern = r'boxed\{((?:[^\{\}]|\{(?:[^\{\}]|\{[^\{\}]*\})*\})*)\}'
+    elif format_mode == "R1_nothink":
+        pattern = r'<answer>(.*?)</answer>'
+    else:
+        return text
 
+    last = None
+    for m in re.finditer(pattern, text, re.DOTALL):
+        last = m
+
+    if last is None:
+        return text
+
+    return text[: last.end()]
 def extract_boxed_answer_with_span(text,format_mode):
     """
     返回最后一个 boxed 的内容与内容字符 span (start,end)，span 不含 boxed 外壳
@@ -2635,7 +2654,161 @@ class RayPPOTrainer(object):
             old_log_probs_in_gt_list.append(old_log_prob[ground_truth_mask.bool()])
 
         return scoreAs_list, prompt_str_list, ground_truth_list, old_log_probs_in_gt_list
+    def replace_golden_trunc_box(
+        self,
+        prompt_ids,
+        gen_response_batch,
+        ground_truth_batch,
+        pad_token_str,
+        eos_token_str,
+        suffix,
+        format_mode="box",
+    ):
+        batch_size, prompt_length = prompt_ids.shape
+        resp_len = gen_response_batch.shape[1]
 
+        # decode generation
+        gen_texts = self.tokenizer.batch_decode(
+            gen_response_batch, skip_special_tokens=False
+        )
+        gen_texts = [replace_right_str(t, pad_token_str) for t in gen_texts]
+        gen_texts = [replace_right_str(t, eos_token_str) for t in gen_texts]
+        # =========================
+        # 1. 构造 pred_text / gold_text
+        # =========================
+        pred_texts = []
+        gold_texts = []
+
+        pred_char_spans = []
+        gold_char_spans = []
+
+        for gen_text, gt in zip(gen_texts, ground_truth_batch):
+            pred_text = truncate_after_last_boxed(gen_text, format_mode)
+            gold_text = replace_boxed_answer(pred_text, gt)
+
+            if eos_token_str and not pred_text.endswith(eos_token_str):
+                pred_text = pred_text + eos_token_str
+
+            pred_texts.append(pred_text)
+
+            # pred span
+            _, pred_span = extract_boxed_answer_with_span(pred_text, format_mode)
+            pred_char_spans.append(pred_span)
+
+
+            if eos_token_str and not gold_text.endswith(eos_token_str):
+                gold_text = gold_text + eos_token_str
+
+            gold_texts.append(gold_text)
+
+            # gold span
+            _, gold_span = extract_boxed_answer_with_span(gold_text, format_mode)
+            gold_char_spans.append(gold_span)
+
+        # =========================
+        # 2. tokenize
+        # =========================
+        max_length = resp_len
+
+        pred_inputs = self.tokenizer(
+            pred_texts,
+            return_tensors="pt",
+            truncation=True,
+            add_special_tokens=False,
+            max_length=max_length,
+            return_offsets_mapping=True,
+        )
+        gold_inputs = self.tokenizer(
+            gold_texts,
+            return_tensors="pt",
+            truncation=True,
+            add_special_tokens=False,
+            max_length=max_length,
+            return_offsets_mapping=True,
+        )
+
+        pred_offsets = pred_inputs.pop("offset_mapping")
+        gold_offsets = gold_inputs.pop("offset_mapping")
+
+        add_one = self.config.actor_rollout_ref.actor.get("add_one_token", False)
+
+        # =========================
+        # 3. char span → token span
+        # =========================
+        pred_answer_span = torch.full((batch_size, 2), -1, dtype=torch.long)
+        gold_answer_span = torch.full((batch_size, 2), -1, dtype=torch.long)
+
+        def charspan_to_tokens(offsets_1d, char_start, char_end, add_one):
+            if char_start < 0 or char_end <= char_start:
+                return (-1, -1)
+
+            tok_start, tok_end = -1, -1
+            for t, (s, e) in enumerate(offsets_1d):
+                if (s, e) == (0, 0):
+                    continue
+                if e <= char_start:
+                    continue
+                if s >= char_end:
+                    break
+                if tok_start == -1:
+                    tok_start = t
+                tok_end = t
+
+            if tok_start != -1 and add_one and tok_start > 0:
+                tok_start -= 1
+
+            return (tok_start, tok_end) if tok_start != -1 else (-1, -1)
+
+        max_pred_ans_len = 0
+        max_gt_ans_len = 0
+
+        for i in range(batch_size):
+            # pred
+            cs, ce = pred_char_spans[i]
+            ts, te = charspan_to_tokens(pred_offsets[i], cs, ce, add_one)
+            pred_answer_span[i] = torch.tensor([ts, te])
+            if ts != -1:
+                max_pred_ans_len = max(max_pred_ans_len, te - ts + 1)
+
+            # gold
+            cs, ce = gold_char_spans[i]
+            ts, te = charspan_to_tokens(gold_offsets[i], cs, ce, add_one)
+            gold_answer_span[i] = torch.tensor([ts, te])
+            if ts != -1:
+                max_gt_ans_len = max(max_gt_ans_len, te - ts + 1)
+
+        # =========================
+        # 4. position ids
+        # =========================
+        position_ids_pr = torch.arange(
+            max_length,
+            dtype=torch.long,
+            device=gold_inputs["attention_mask"].device,
+        ).unsqueeze(0).expand(batch_size, -1)
+
+        gen_position_ids_pr = position_ids_pr.clone()
+
+        # =========================
+        # 5. batch output
+        # =========================
+        batch_results = {
+            f"gen_input_ids{suffix}": pred_inputs["input_ids"],
+            f"gen_attention_mask{suffix}": pred_inputs["attention_mask"],
+            f"input_ids{suffix}": gold_inputs["input_ids"],
+            f"attention_mask{suffix}": gold_inputs["attention_mask"],
+            f"gen_answer_span{suffix}": pred_answer_span,
+            f"gt_answer_span{suffix}": gold_answer_span,
+            f"gen_position_ids{suffix}": gen_position_ids_pr,
+            f"position_ids{suffix}": position_ids_pr,
+            f"max_gen_ans_len{suffix}": torch.tensor(
+                [max_pred_ans_len] * batch_size, dtype=torch.int
+            ),
+            f"max_gt_ans_len{suffix}": torch.tensor(
+                [max_gt_ans_len] * batch_size, dtype=torch.int
+            ),
+        }
+
+        return batch_results
     def prompt_and_final_answer(
         self, prompt_ids, gen_response_batch, ground_truth_batch,
         pad_token_str, eos_token_str, suffix
@@ -2935,14 +3108,20 @@ class RayPPOTrainer(object):
                 pad_token_str=pad_token_str,
                 suffix=suffix
             )
-        elif self.config.actor_rollout_ref.actor.get('merge_golden_method', False)=="only_answer":
+        elif self.config.actor_rollout_ref.actor.get('merge_golden_method', False)=="only_answer_feiqi":
             batch_results=self.prompt_and_final_answer(prompt_ids=gen_batch_output.batch['prompts'],
             gen_response_batch=gen_responses,
             ground_truth_batch=ground_truth_list,
             pad_token_str=pad_token_str,
             eos_token_str=eos_token_str,
             suffix=suffix)
-
+        elif self.config.actor_rollout_ref.actor.get('merge_golden_method', False)=="only_answer":
+            batch_results=self.replace_golden_trunc_box(prompt_ids=gen_batch_output.batch['prompts'],
+            gen_response_batch=gen_responses,
+            ground_truth_batch=ground_truth_list,
+            pad_token_str=pad_token_str,
+            eos_token_str=eos_token_str,
+            suffix=suffix)
         gen_batch_output: DataProto = DataProto.from_single_dict(batch_results)
         self.tokenizer = self.tokenizer.tokenizer
         return gen_batch_output
