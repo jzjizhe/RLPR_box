@@ -1,0 +1,1 @@
+find . -type f \( -name "optim_world_size*.pt" -o -name "extra_state_world_size*.pt" \) -delete
