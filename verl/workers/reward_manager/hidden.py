@@ -808,12 +808,12 @@ def subspace_energy_overlap_topk_symmetric(
     Tp = H_pred.size(0)
 
     # Token normalization (length-agnostic)
-    # H_gold_n = _token_whiten(H_gold, eps=eps)  # [Tg, D]
-    # H_pred_n = _token_whiten(H_pred, eps=eps)  # [Tp, D]
+    # H_gold = _token_whiten(H_gold, eps=eps)  # [Tg, D]
+    # H_pred = _token_whiten(H_pred, eps=eps)  # [Tp, D]
 
     try:
-        _, _, Vh_gold = torch.linalg.svd(H_gold_n, full_matrices=False)
-        _, _, Vh_pred = torch.linalg.svd(H_pred_n, full_matrices=False)
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
     except:
         return 0.0
 
@@ -821,7 +821,7 @@ def subspace_energy_overlap_topk_symmetric(
     V_pred = Vh_pred.T  # [D, r_eff_pred]
 
     # Golden projection energy onto pred subspace
-    gold_proj_pred = H_gold_n @ V_pred  # [Tg, r_eff_pred]
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
     gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
     gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
 
@@ -829,7 +829,7 @@ def subspace_energy_overlap_topk_symmetric(
         return 0.0
 
     # Predicted projection energy onto gold subspace
-    pred_proj_gold = H_pred_n @ V_gold  # [Tp, r_eff_gold]
+    pred_proj_gold = H_pred @ V_gold  # [Tp, r_eff_gold]
     pred_energy_gold = pred_proj_gold.pow(2).sum(dim=1)  # [Tp]
     pred_energy_gold = pred_energy_gold.topk(min(k, Tp)).values.mean().item()
 
@@ -863,18 +863,18 @@ def subspace_energy_overlap_topk_gold_to_pred(
     Tp = H_pred.size(0)
 
     # Token normalization (length-agnostic)
-    # H_gold_n = _token_whiten(H_gold, eps=eps)  # [Tg, D]
-    # H_pred_n = _token_whiten(H_pred, eps=eps)  # [Tp, D]
+    # H_gold = _token_whiten(H_gold, eps=eps)  # [Tg, D]
+    # H_pred = _token_whiten(H_pred, eps=eps)  # [Tp, D]
 
     try:
-        _, _, Vh_pred = torch.linalg.svd(H_pred_n, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
     except:
         return 0.0
 
     V_pred = Vh_pred.T  # [D, r_eff_pred]
 
     # Golden projection energy onto pred subspace
-    gold_proj_pred = H_gold_n @ V_pred  # [Tg, r_eff_pred]
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
     gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
     gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
 
