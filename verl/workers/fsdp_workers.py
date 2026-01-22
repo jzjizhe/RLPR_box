@@ -800,7 +800,7 @@ class ActorRolloutRefWorker(Worker):
         format_coefficient = reward_config.get('format_coefficient', 0.1)
         format_mode = reward_config.get('format_mode', 'R1')
         alpha = reward_config.get('amplify_reward_coef', 1.8)
-        topk = reward_config.get('topk', 5)
+        topk= self.config.actor.get("topk",5)
 
         # 设置 shaping function
         if shaping_function_name == 'identity':
