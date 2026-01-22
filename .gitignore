@@ -134,3 +134,4 @@ merge_model.sh
 remove_train_state.sh
 results/
 pseudo_reward/
+core.*
