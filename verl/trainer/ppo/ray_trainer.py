@@ -1906,7 +1906,7 @@ class RayPPOTrainer(object):
                                                 old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                                             else:
                                                 old_log_prob = self.ref_policy_wg.compute_ref_gen_hidden_states(batch)
-                                        elif self.config.actor_rollout_ref.actor.get('merge_golden_method', False)=="only_answer": 
+                                        elif "only_answer" in self.config.actor_rollout_ref.actor.get('merge_golden_method', False): 
                                             if not self.config.actor_rollout_ref.actor.get('is_ref_hidden',False):
                                                 old_log_prob = self.actor_rollout_wg.compute_actor_gen_hidden_states(batch)
                                             else:
@@ -2114,7 +2114,7 @@ class RayPPOTrainer(object):
                                 and self.config.data.get("filter_accuracy", False) is False)
                             or (
                                 self.config.reward_model.reward_manager == 'hidden'
-                                and self.config.actor_rollout_ref.actor.get('merge_golden_method', False)=="only_answer"
+                                and "only_answer" in self.config.actor_rollout_ref.actor.get('merge_golden_method', False)
                             )
                             or self.config.actor_rollout_ref.actor.get('is_ref_hidden',False)
                         )
@@ -2133,7 +2133,7 @@ class RayPPOTrainer(object):
                             'entropy/response_entropy/min': torch.min(row_mean).item(),
                         })
                         need_compute_gen_hidden=(self.config.reward_model.reward_manager == 'hidden' and self.config.data.get("filter_accuracy", False) is False
-                                and self.config.actor_rollout_ref.actor.get('merge_golden_method', False)=="only_answer"
+                                and "only_answer" in self.config.actor_rollout_ref.actor.get('merge_golden_method', False)
                                 or  self.config.actor_rollout_ref.actor.get('is_ref_hidden',False))
                         if need_compute_gen_hidden:
                             if not self.config.actor_rollout_ref.actor.get('is_ref_hidden',False):
@@ -3681,4 +3681,4 @@ def load_from_json(path):
 def save_to_json(result, path):
     with open(path, 'w') as file:
         print(f"We dump to {path}")
-        json.dump(result, file)
+        

@@ -781,7 +781,8 @@ class ActorRolloutRefWorker(Worker):
             subspace_sim_r_weighted_golden_nodiv,subspace_energy_overlap_golden_anchored_topk,subspace_energy_overlap_nocenter_topk,
             subspace_energy_overlap_topk_nocenter,mean_cosine_score,subspace_energy_overlap_topk_white_norm,subspace_energy_overlap_topk_white,
             subspace_energy_overlap_topk_symmetric,subspace_energy_overlap_topk_gold_to_pred,subspace_energy_overlap_topk_symmetric_norm,
-            subspace_energy_overlap_topk_white_v3,subspace_energy_overlap_topk_white_v2
+            subspace_energy_overlap_topk_white_v3,subspace_energy_overlap_topk_white_v2,
+            subspace_energy_overlap_symmetric_mean_nocenter
         )
 
         # 检查是否已有 reward scores
@@ -799,6 +800,7 @@ class ActorRolloutRefWorker(Worker):
         format_coefficient = reward_config.get('format_coefficient', 0.1)
         format_mode = reward_config.get('format_mode', 'R1')
         alpha = reward_config.get('amplify_reward_coef', 1.8)
+        topk = reward_config.get('topk', 5)
 
         # 设置 shaping function
         if shaping_function_name == 'identity':
@@ -866,7 +868,7 @@ class ActorRolloutRefWorker(Worker):
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],
                         pred_mask=pred_mask[i],
-                        k=5
+                        k=topk
                     )
                 elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_tokencenter_topk":
                     hidden_score = subspace_energy_overlap_tokencenter_topk(
@@ -874,7 +876,7 @@ class ActorRolloutRefWorker(Worker):
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],
                         pred_mask=pred_mask[i],
-                        k=5
+                        k=topk
                     )
                 elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_tokencenter_mean":
                     hidden_score = subspace_energy_overlap_tokencenter_mean(
@@ -939,7 +941,7 @@ class ActorRolloutRefWorker(Worker):
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],
                         pred_mask=pred_mask[i],
-                        k=5
+                        k=topk
                     )
                 elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_nocenter_topk":
                     hidden_score = subspace_energy_overlap_nocenter_topk(
@@ -947,7 +949,7 @@ class ActorRolloutRefWorker(Worker):
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],
                         pred_mask=pred_mask[i],
-                        k=5
+                        k=topk
                     )
                 elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_topk_symmetric":
                     hidden_score = subspace_energy_overlap_topk_symmetric(
@@ -955,7 +957,7 @@ class ActorRolloutRefWorker(Worker):
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],
                         pred_mask=pred_mask[i],
-                        k=5
+                        k=topk
                     )
                 elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_topk_gold_to_pred":
                     hidden_score = subspace_energy_overlap_topk_gold_to_pred(
@@ -963,7 +965,7 @@ class ActorRolloutRefWorker(Worker):
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],
                         pred_mask=pred_mask[i],
-                        k=5
+                        k=topk
                     )
                 elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_topk_symmetric_norm":
                     hidden_score = subspace_energy_overlap_topk_symmetric_norm(
@@ -971,7 +973,7 @@ class ActorRolloutRefWorker(Worker):
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],
                         pred_mask=pred_mask[i],
-                        k=5
+                        k=topk
                     )
                 elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_topk_white_v3":
                     hidden_score = subspace_energy_overlap_topk_white_v3(
@@ -979,7 +981,7 @@ class ActorRolloutRefWorker(Worker):
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],
                         pred_mask=pred_mask[i],
-                        k=5
+                        k=topk
                     )
                 elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_topk_white_v2":
                     hidden_score = subspace_energy_overlap_topk_white_v2(
@@ -987,7 +989,14 @@ class ActorRolloutRefWorker(Worker):
                         pred_hidden=pred_hidden[i],
                         golden_mask=golden_mask[i],
                         pred_mask=pred_mask[i],
-                        k=5
+                        k=topk
+                    )
+                elif self.config.actor.reward_hidden_type=="subspace_energy_overlap_symmetric_mean_nocenter":
+                    hidden_score = subspace_energy_overlap_symmetric_mean_nocenter(
+                        golden_hidden=golden_hidden[i],
+                        pred_hidden=pred_hidden[i],
+                        golden_mask=golden_mask[i],
+                        pred_mask=pred_mask[i],
                     )
                 hidden_score = shaping_function(hidden_score)
 

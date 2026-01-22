@@ -952,7 +952,105 @@ def subspace_energy_overlap_topk_symmetric(
     gold_pred_ratio = np.clip(gold_energy_pred / (pred_energy_gold + eps),0,1)
     score = (pred_gold_ratio + gold_pred_ratio) / 2
     return score
+def subspace_energy_overlap_topk_symmetric_nocenter(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
 
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto gold subspace
+    pred_proj_gold = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_gold = pred_proj_gold.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_gold = pred_energy_gold.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_gold < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    pred_gold_ratio = np.clip(pred_energy_gold / (gold_energy_pred + eps),0,1)
+    gold_pred_ratio = np.clip(gold_energy_pred / (pred_energy_gold + eps),0,1)
+    score = (pred_gold_ratio + gold_pred_ratio) / 2
+    return score
+def subspace_energy_overlap_symmetric_mean_nocenter(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred              # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1).mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto gold subspace
+    pred_proj_gold = H_pred @ V_gold               # [Tp, r_eff_gold]
+    pred_energy_gold = pred_proj_gold.pow(2).sum(dim=1).mean().item()
+
+    if pred_energy_gold < eps:
+        return 0.0
+
+    # Symmetric score (clipped ratio)
+    pred_gold_ratio = np.clip(pred_energy_gold / (gold_energy_pred + eps), 0, 1)
+    gold_pred_ratio = np.clip(gold_energy_pred / (pred_energy_gold + eps), 0, 1)
+
+    score = (pred_gold_ratio + gold_pred_ratio) / 2
+    return score
 def subspace_energy_overlap_topk_symmetric_norm(
     golden_hidden,       # [S, D] golden final answer hidden
     pred_hidden,         # [S, D] predicted final answer hidden
@@ -1148,6 +1246,7 @@ def subspace_energy_overlap_goldencenter_topk(
     pred_energy = pred_energy.topk(min(k,H_pred.size(0))).values.mean().item()
     score = pred_energy / (gold_energy + eps)
     return score
+
 def threshold_t_sigmoidv2_k(x, t, k=6):
     # concave curve
     if x < t:
