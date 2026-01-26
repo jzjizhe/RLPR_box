@@ -690,7 +690,7 @@ class RayPPOTrainer(object):
             raise NotImplementedError
 
         self._validate_config()
-        self._create_dataset_for_llama_and_gemma()
+        #self._create_dataset_for_llama_and_gemma()
         self._create_dataloader()
 
     def _validate_config(self):

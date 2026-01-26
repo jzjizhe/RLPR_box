@@ -135,12 +135,14 @@ def _default_compute_score(data_source, solution_str, ground_truth, extra_info=N
             res = math_verify.compute_score(solution_str, ground_truth)
         elif format_mode=="R1_nothink":
             res = math_verify.compute_score_r1(solution_str, ground_truth)
-    elif 'gpqa_diamond' in data_source or 'HellaSwag' in data_source or 'WebInstruct-verified-val' in data_source or 'MMLUPro' in data_source or 'SuperGPQA' in data_source:
+    elif ('gpqa_diamond' in data_source) or ('HellaSwag' in data_source) or ('WebInstruct-verified-val') in data_source or ('MMLUPro' in data_source) or ('SuperGPQA' in data_source) or "CFA_Eeay" in data_source:
         
         if 'MMLUPro' in data_source or 'SuperGPQA' in data_source:
             options = 'ABCDEFGHIJKLMNOP'
         elif 'gpqa_diamond' in data_source or 'HellaSwag' in data_source or 'WebInstruct-verified-val' in data_source:
             options = 'ABCD'
+        elif 'CFA_Eeay' in data_source:
+            options='ABC'
         else:
             raise ValueError
 
@@ -157,7 +159,7 @@ def _default_compute_score(data_source, solution_str, ground_truth, extra_info=N
                                                               "allenai-tulu-3-sft-mixture-train-tulu_v3.9_sciriff_10k",
                                                               "allenai-tulu-3-sft-mixture-train-tulu_v3.9_table_gpt_5k",
                                                               "allenai-tulu-3-sft-mixture-train-oasst1_converted",
-                                                              "simplelr_deepscaler"]):
+                                                              "simplelr_deepscaler","FinCot",]):
         if phase == 'train':
             res = prime_math_train.compute_score(solution_str, ground_truth)
         elif phase == 'validation':

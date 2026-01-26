@@ -51,7 +51,41 @@ def _token_whiten(H, eps=1e-8):
     Ct_inv_sqrt = W @ eigvecs.T
 
     return Ct_inv_sqrt @ Hc
-
+def randomized_svd_full_V(H, oversample=8, n_iter=2):
+    """
+    随机化SVD：快速计算矩阵H的全部右奇异向量（无截断）
+    适配场景：H.shape [T, d]（T<<d，比如20×10000），需完整右奇异向量
+    Args:
+        H: 输入矩阵，shape [T, d]（T=token数，d=隐维度）
+        oversample: 过采样数（默认8，仅用于提升低秩近似精度，不影响最终维度）
+        n_iter: 幂迭代次数（默认2，保证精度和标准SVD一致）
+    Returns:
+        V_full: 全部右奇异向量，shape [d, T]（和标准SVD的V完全一致）
+    """
+    T, d = H.shape
+    # 随机投影维度设为T+oversample（保证覆盖全部子空间，无信息损失）
+    k = min(T + oversample, d)  # 避免k超过d（隐维度）
+    
+    # 1. 随机投影：将d维映射到k维（大幅降低后续计算量）
+    Omega = torch.randn(d, k, device=H.device, dtype=H.dtype)  # [d, k]
+    Y = H @ Omega  # [T, k]
+    
+    # 2. 幂迭代：提升近似精度（保证和标准SVD结果一致）
+    for _ in range(n_iter):
+        Y = H @ (H.T @ Y)
+        Y, _ = torch.linalg.qr(Y, mode='reduced')
+    
+    # 3. 正交化得到Q（shape [T, k]）
+    Q, _ = torch.linalg.qr(Y, mode='reduced')
+    
+    # 4. 小矩阵SVD：对Q.T@H（[k, d]）做完整SVD
+    B = Q.T @ H  # [k, d]，k=28<<d=10000，计算极快
+    _, _, Vh = torch.linalg.svd(B, full_matrices=False)  # Vh.shape [k, d]
+    
+    # 5. 还原全部右奇异向量（截取前T列，对应H的全部奇异向量维度）
+    V_full = Vh[:T, :].T  # [d, T]：和标准SVD返回的V维度完全一致
+    
+    return V_full
 def token_center(H):
     return H - H.mean(dim=0, keepdim=True)
 
@@ -495,6 +529,10 @@ def subspace_energy_overlap_topk_nocenter(
     pred_energy = pred_energy.topk(min(k, Tp)).values.mean().item()
 
     score = pred_energy / (gold_energy + eps)
+    if score >1.5:
+        score=0
+    if score>1:
+        score=1
     return score
 def subspace_energy_overlap_nocenter_topk(
     golden_hidden,       # [S, D] ( golden final answer hidden)
@@ -948,8 +986,74 @@ def subspace_energy_overlap_topk_symmetric(
         return 0.0
 
     # Symmetric score: energy ratio in both directions
-    pred_gold_ratio = np.clip(pred_energy_gold / (gold_energy_pred + eps),0,1)
-    gold_pred_ratio = np.clip(gold_energy_pred / (pred_energy_gold + eps),0,1)
+    pred_gold_ratio = pred_energy_gold / (gold_energy_pred + eps)
+    if pred_gold_ratio>1.5:
+        pred_gold_ratio=0
+    if pred_gold_ratio>1:
+        pred_gold_ratio=1
+    gold_pred_ratio = gold_energy_pred / (pred_energy_gold + eps)
+    if gold_pred_ratio>1.5:
+        gold_pred_ratio=0
+    if gold_pred_ratio>1:
+        gold_pred_ratio=1
+    score = (pred_gold_ratio + gold_pred_ratio) / 2
+    return score
+def subspace_energy_overlap_topk_symmetric_v2(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto gold subspace
+    pred_proj_gold = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_gold = pred_proj_gold.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_gold = pred_energy_gold.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_gold < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    pred_gold_ratio = pred_energy_gold / (gold_energy_pred + eps)
+    if pred_gold_ratio>1.5:
+        pred_gold_ratio=0
+    if pred_gold_ratio>1:
+        pred_gold_ratio=1
+    gold_pred_ratio = gold_energy_pred / (pred_energy_gold + eps)
+    if gold_pred_ratio>1.5:
+        gold_pred_ratio=0
+    if gold_pred_ratio>1:
+        gold_pred_ratio=1
     score = (pred_gold_ratio + gold_pred_ratio) / 2
     return score
 def subspace_energy_overlap_topk_symmetric_nocenter(
@@ -1002,6 +1106,256 @@ def subspace_energy_overlap_topk_symmetric_nocenter(
     pred_gold_ratio = np.clip(pred_energy_gold / (gold_energy_pred + eps),0,1)
     gold_pred_ratio = np.clip(gold_energy_pred / (pred_energy_gold + eps),0,1)
     score = (pred_gold_ratio + gold_pred_ratio) / 2
+    return score
+
+def subspace_energy_overlap_topk_mix_min(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto gold subspace
+    pred_proj_gold = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_gold = pred_proj_gold.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_gold = pred_energy_gold.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_gold < eps:
+        return 0.0
+
+    pred_gold_ratio = pred_energy_gold / (gold_energy_pred + eps)
+    gold_pred_ratio = gold_energy_pred / (pred_energy_gold + eps)
+    score = min(pred_gold_ratio,gold_pred_ratio)
+    return score
+def subspace_energy_overlap_mix_min_mean(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    # 关键修改：直接计算所有值的均值，替代topk逻辑
+    gold_energy_pred = gold_energy_pred.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto gold subspace
+    pred_proj_gold = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_gold = pred_proj_gold.pow(2).sum(dim=1)  # [Tp]
+    # 关键修改：直接计算所有值的均值，替代topk逻辑
+    pred_energy_gold = pred_energy_gold.mean().item()
+
+    if pred_energy_gold < eps:
+        return 0.0
+
+    pred_gold_ratio = pred_energy_gold / (gold_energy_pred + eps)
+    gold_pred_ratio = gold_energy_pred / (pred_energy_gold + eps)
+    score = min(pred_gold_ratio, gold_pred_ratio)
+    return score
+def subspace_energy_overlap_topk_mix_nocenter(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto gold subspace
+    pred_proj_gold = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_gold = pred_proj_gold.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_gold = pred_energy_gold.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_gold < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    score=1/(1+abs(pred_energy_gold-gold_energy_pred))
+    return score
+def subspace_energy_overlap_topk_mix_nocenter_t(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    t=10,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto gold subspace
+    pred_proj_gold = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_gold = pred_proj_gold.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_gold = pred_energy_gold.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_gold < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    score=1/(1+abs(pred_energy_gold-gold_energy_pred)/t)
+    return score
+import math
+def subspace_energy_overlap_topk_mix_nocenter_sqrt(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto gold subspace
+    pred_proj_gold = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_gold = pred_proj_gold.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_gold = pred_energy_gold.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_gold < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    score=1/(1+math.sqrt(abs(pred_energy_gold-gold_energy_pred)))
     return score
 def subspace_energy_overlap_symmetric_mean_nocenter(
     golden_hidden,       # [S, D] golden final answer hidden
@@ -1148,9 +1502,306 @@ def subspace_energy_overlap_topk_gold_to_pred(
     if gold_energy_pred < eps:
         return 0.0
 
-    # Final score: energy ratio from golden to pred
-    return gold_energy_pred
+    # Predicted projection energy onto pred subspace
+    pred_proj_pred = H_pred @ V_pred  # [Tp, r_eff_pred]
+    pred_energy_pred = pred_proj_pred.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_pred = pred_energy_pred.topk(min(k, Tp)).values.mean().item()
 
+    if pred_energy_pred < eps:
+        return 0.0
+
+    # Final score: ratio of golden energy to predicted energy in the same subspace
+    score = gold_energy_pred / (pred_energy_pred + eps)
+    return score
+
+def subspace_energy_overlap_topk_symmetric_nocenter_modify(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    # SVD to get subspaces
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto ref subspace
+    gold_proj_ref = H_gold @ V_gold  # [Tg, r_eff_gold]
+    gold_energy_ref = gold_proj_ref.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_ref = gold_energy_ref.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_ref < eps:
+        return 0.0
+
+    # Predicted projection energy onto ref subspace
+    pred_proj_ref = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_ref = pred_proj_ref.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_ref = pred_energy_ref.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_ref < eps:
+        return 0.0
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto pred subspace
+    pred_proj_pred = H_pred @ V_pred  # [Tp, r_eff_pred]
+    pred_energy_pred = pred_proj_pred.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_pred = pred_energy_pred.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_pred < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    score_ref = np.clip(pred_energy_ref / (gold_energy_ref + eps), 0, 1)
+
+    score_pred = np.clip(gold_energy_pred / (pred_energy_pred + eps), 0, 1)
+
+    score = (score_ref + score_pred) / 2
+    return score
+def subspace_energy_overlap_topk_symmetric_nocenter_modify_random(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    # SVD to get subspaces
+    try:
+        # _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        # _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+        V_gold = randomized_svd_full_V(H_gold)  # [d, T]，等价于原Vh_gold.T
+        V_pred = randomized_svd_full_V(H_pred)  # [d, T]，等价于原Vh_pred.T
+    except:
+        return 0.0
+
+    # V_gold = Vh_gold.T  # [D, r_eff_gold]
+    # V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto ref subspace
+    gold_proj_ref = H_gold @ V_gold  # [Tg, r_eff_gold]
+    gold_energy_ref = gold_proj_ref.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_ref = gold_energy_ref.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_ref < eps:
+        return 0.0
+
+    # Predicted projection energy onto ref subspace
+    pred_proj_ref = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_ref = pred_proj_ref.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_ref = pred_energy_ref.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_ref < eps:
+        return 0.0
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto pred subspace
+    pred_proj_pred = H_pred @ V_pred  # [Tp, r_eff_pred]
+    pred_energy_pred = pred_proj_pred.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_pred = pred_energy_pred.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_pred < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    score_ref = np.clip(pred_energy_ref / (gold_energy_ref + eps), 0, 1)
+
+    score_pred = np.clip(gold_energy_pred / (pred_energy_pred + eps), 0, 1)
+
+    score = (score_ref + score_pred) / 2
+    return score
+def subspace_energy_overlap_topk_symmetric_white_modify(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+    try:
+        H_gold = _token_whiten(H_gold, eps=eps)  # [Tg, D]
+        H_pred = _token_whiten(H_pred, eps=eps)  # [Tp, D]
+    except:
+        return 0
+    # SVD to get subspaces
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto ref subspace
+    gold_proj_ref = H_gold @ V_gold  # [Tg, r_eff_gold]
+    gold_energy_ref = gold_proj_ref.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_ref = gold_energy_ref.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_ref < eps:
+        return 0.0
+
+    # Predicted projection energy onto ref subspace
+    pred_proj_ref = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_ref = pred_proj_ref.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_ref = pred_energy_ref.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_ref < eps:
+        return 0.0
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto pred subspace
+    pred_proj_pred = H_pred @ V_pred  # [Tp, r_eff_pred]
+    pred_energy_pred = pred_proj_pred.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_pred = pred_energy_pred.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_pred < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    score_ref = np.clip(pred_energy_ref / (gold_energy_ref + eps), 0, 1)
+
+    score_pred = np.clip(gold_energy_pred / (pred_energy_pred + eps), 0, 1)
+
+    score = (score_ref + score_pred) / 2
+    return score
+def subspace_energy_overlap_topk_symmetric_nocenter_modify_v2(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    k=5,
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
+
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    # SVD to get subspaces
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto ref subspace
+    gold_proj_ref = H_gold @ V_gold  # [Tg, r_eff_gold]
+    gold_energy_ref = gold_proj_ref.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_ref = gold_energy_ref.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_ref < eps:
+        return 0.0
+
+    # Predicted projection energy onto ref subspace
+    pred_proj_ref = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_ref = pred_proj_ref.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_ref = pred_energy_ref.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_ref < eps:
+        return 0.0
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    gold_energy_pred = gold_energy_pred.topk(min(k, Tg)).values.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto pred subspace
+    pred_proj_pred = H_pred @ V_pred  # [Tp, r_eff_pred]
+    pred_energy_pred = pred_proj_pred.pow(2).sum(dim=1)  # [Tp]
+    pred_energy_pred = pred_energy_pred.topk(min(k, Tp)).values.mean().item()
+
+    if pred_energy_pred < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    score_ref = pred_energy_ref / (gold_energy_ref + eps)
+    if score_ref>1.5:
+        score_ref=0
+    if score_ref>1:
+        score_ref=1
+    score_pred = gold_energy_pred / (pred_energy_pred + eps)
+    if score_pred>1.5:
+        score_pred=0
+    if score_pred>1:
+        score_pred=1
+    score = (score_ref + score_pred) / 2
+    return score
 def sigmoid_k(x, k=6):
     """
     Maps a value x in [0, 1] to [0, 1] using a sigmoid-like S-shaped curve.
@@ -1173,7 +1824,77 @@ def sigmoid_k(x, k=6):
     
     # Scale the output to [0, 1]
     return sigmoid
+def subspace_energy_overlap_mean_symmetric_nocenter_modify(
+    golden_hidden,       # [S, D] golden final answer hidden
+    pred_hidden,         # [S, D] predicted final answer hidden
+    golden_mask,         # [S] boolean mask for golden answer tokens
+    pred_mask,           # [S] boolean mask for predicted answer tokens
+    eps=1e-8,
+):
+    # Extract spans
+    H_pred = pred_hidden[pred_mask]    # [Tp, D]
+    if H_pred.size(0) == 0:
+        return 0.0
 
+    H_gold = golden_hidden[golden_mask]  # [Tg, D]
+    if H_gold.size(0) == 0:
+        return 0.0
+
+    Tg, D = H_gold.shape
+    Tp = H_pred.size(0)
+
+    # SVD to get subspaces
+    try:
+        _, _, Vh_gold = torch.linalg.svd(H_gold, full_matrices=False)
+        _, _, Vh_pred = torch.linalg.svd(H_pred, full_matrices=False)
+    except:
+        return 0.0
+
+    V_gold = Vh_gold.T  # [D, r_eff_gold]
+    V_pred = Vh_pred.T  # [D, r_eff_pred]
+
+    # Golden projection energy onto ref subspace
+    gold_proj_ref = H_gold @ V_gold  # [Tg, r_eff_gold]
+    gold_energy_ref = gold_proj_ref.pow(2).sum(dim=1)  # [Tg]
+    # 改动1：去掉topk，直接计算所有元素的均值
+    gold_energy_ref = gold_energy_ref.mean().item()
+
+    if gold_energy_ref < eps:
+        return 0.0
+
+    # Predicted projection energy onto ref subspace
+    pred_proj_ref = H_pred @ V_gold  # [Tp, r_eff_gold]
+    pred_energy_ref = pred_proj_ref.pow(2).sum(dim=1)  # [Tp]
+    # 改动2：去掉topk，直接计算所有元素的均值
+    pred_energy_ref = pred_energy_ref.mean().item()
+
+    if pred_energy_ref < eps:
+        return 0.0
+
+    # Golden projection energy onto pred subspace
+    gold_proj_pred = H_gold @ V_pred  # [Tg, r_eff_pred]
+    gold_energy_pred = gold_proj_pred.pow(2).sum(dim=1)  # [Tg]
+    # 改动3：去掉topk，直接计算所有元素的均值
+    gold_energy_pred = gold_energy_pred.mean().item()
+
+    if gold_energy_pred < eps:
+        return 0.0
+
+    # Predicted projection energy onto pred subspace
+    pred_proj_pred = H_pred @ V_pred  # [Tp, r_eff_pred]
+    pred_energy_pred = pred_proj_pred.pow(2).sum(dim=1)  # [Tp]
+    # 改动4：去掉topk，直接计算所有元素的均值
+    pred_energy_pred = pred_energy_pred.mean().item()
+
+    if pred_energy_pred < eps:
+        return 0.0
+
+    # Symmetric score: energy ratio in both directions
+    score_ref = np.clip(pred_energy_ref / (gold_energy_ref + eps), 0, 1)
+    score_pred = np.clip(gold_energy_pred / (pred_energy_pred + eps), 0, 1)
+
+    score = (score_ref + score_pred) / 2
+    return score
 def threshold_t_sigmoid_k(x, t, k=6):
     """
     Maps a value x in [0, 1] to [0, 1] using a sigmoid-like S-shaped curve.
